@@ -1,0 +1,6 @@
+name: /mnt/d/Projects/envs/sfce
+channels:
+  - defaults
+dependencies:
+  - python=3.10
+prefix: /mnt/d/Projects/envs/sfce
