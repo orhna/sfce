@@ -7,7 +7,6 @@ Base = declarative_base()
 engine = create_engine('postgresql://aorhu:Avatar61!@localhost:5432/sfce')
 Session = sessionmaker(bind=engine)
 
-
 class Video(Base):
     __tablename__ = 'videos'
     id = Column(Integer, primary_key=True)
