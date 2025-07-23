@@ -4,8 +4,34 @@ import os
 from tqdm import tqdm
 import mediapipe as mp
 import numpy as np
+from .db import get_video_path
 
-def analyze_video_emotions(video_path, interval_sec=5, time_period=None):
+def analyze_video_emotions_by_id(video_id, interval_sec=5, time_period=None, output_json_path=None):
+    """
+    Analyze emotions in a video using video_id to get path from database.
+    
+    Args:
+        video_id (str): Video ID to process
+        interval_sec (int): Time interval in seconds for analysis (default: 5)
+        time_period (str, optional): Time period to analyze in format "MM:SS-MM:SS" (e.g., "00:00-00:10")
+        output_json_path (str, optional): Custom path for JSON output. If None, saves to video directory
+    
+    Returns:
+        dict: JSON-like dictionary with video_id and emotion_segments
+    """
+    # Get video path from database
+    video_path = get_video_path(video_id)
+    if not video_path or not os.path.exists(video_path):
+        raise ValueError(f"Video file not found in database for video_id: {video_id}")
+    
+    # Set default output path to video directory
+    if output_json_path is None:
+        video_dir = os.path.dirname(video_path)
+        output_json_path = os.path.join(video_dir, "video_emotions.json")
+    
+    return analyze_video_emotions(video_path, interval_sec, time_period, output_json_path)
+
+def analyze_video_emotions(video_path, interval_sec=5, time_period=None, output_json_path=None):
     """
     Analyze emotions in a video using MediaPipe for face detection and basic emotion classification.
     
@@ -13,16 +39,21 @@ def analyze_video_emotions(video_path, interval_sec=5, time_period=None):
         video_path (str): Path to the video file
         interval_sec (int): Time interval in seconds for analysis (default: 5)
         time_period (str, optional): Time period to analyze in format "MM:SS-MM:SS" (e.g., "00:00-00:10")
+        output_json_path (str, optional): Custom path for JSON output. If None, saves to video directory
     
     Returns:
-        dict: JSON-like dictionary with video_id and emotion_segments
+        dict: JSON-like dictionary with video_id, emotion_segments, and output_file path
     """
     # Get video ID from filename
     video_id = os.path.splitext(os.path.basename(video_path))[0]
     
+    # Set default output path if not provided
+    if output_json_path is None:
+        video_dir = os.path.dirname(video_path)
+        output_json_path = os.path.join(video_dir, "video_emotions.json")
+    
     # Initialize MediaPipe Face Detection
     mp_face_detection = mp.solutions.face_detection
-    mp_drawing = mp.solutions.drawing_utils
     
     # Initialize video capture
     cap = cv2.VideoCapture(video_path)
@@ -52,8 +83,11 @@ def analyze_video_emotions(video_path, interval_sec=5, time_period=None):
     with mp_face_detection.FaceDetection(model_selection=0, min_detection_confidence=0.5) as face_detection:
         with tqdm(total=total_iterations, desc="Analyzing emotions") as pbar:
             for current_sec in range(int(start_sec), int(end_sec), interval_sec):
-                # Format time key as MM:SS
-                time_key = f"{current_sec // 60:02d}:{current_sec % 60:02d}"
+                # Format time key as MM:SS-MM:SS (interval format)
+                start_min, start_s = divmod(current_sec, 60)
+                end_time = current_sec + interval_sec
+                end_min, end_s = divmod(end_time, 60)
+                time_key = f"{start_min}:{start_s:02d}-{end_min}:{end_s:02d}"
                 
                 # Generate 10 evenly spaced time points within the interval
                 sample_times = []
@@ -121,9 +155,31 @@ def analyze_video_emotions(video_path, interval_sec=5, time_period=None):
     
     cap.release()
     
+    # Save emotion segments to JSON file
+    print(f"Saving emotion analysis to: {output_json_path}")
+    with open(output_json_path, 'w', encoding='utf-8') as f:
+        json.dump(emotion_segments, f, ensure_ascii=False, indent=2)
+    
+    print(f"✓ Video emotion analysis complete!")
+    print(f"  Total intervals analyzed: {len(emotion_segments)}")
+    print(f"  Output saved to: {output_json_path}")
+    
+    # Update database with video emotions path
+    try:
+        from .create_db import update_file_path
+        # Extract just the video ID number if filename has 'twitch_' prefix
+        db_video_id = video_id.replace('twitch_', '') if video_id.startswith('twitch_') else video_id
+        update_file_path(db_video_id, video_emotions_path=output_json_path)
+        print(f"✓ Database updated with video emotions path for video_id: {db_video_id}")
+    except Exception as e:
+        print(f"Warning: Could not update database with video emotions path: {e}")
+    
     return {
         "video_id": video_id,
-        "emotion_segments": emotion_segments
+        "emotion_segments": emotion_segments,
+        "output_file": output_json_path,
+        "total_intervals": len(emotion_segments),
+        "interval_seconds": interval_sec
     }
 
 
