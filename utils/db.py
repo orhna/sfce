@@ -3,9 +3,22 @@ from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker
 import datetime
 import re
+import os
+import sys
+
+# Add parent directory to path to import config
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+try:
+    from config import DATABASE_URL
+except ImportError:
+    print("Error: config.py not found!")
+    print("Please copy config.example.py to config.py and update your database settings.")
+    print("Example: cp config.example.py config.py")
+    sys.exit(1)
 
 Base = declarative_base()
-engine = create_engine('postgresql://aorhu:Avatar61!@localhost:5432/sfce')
+engine = create_engine(DATABASE_URL)
 Session = sessionmaker(bind=engine)
 
 class Video(Base):
@@ -19,6 +32,7 @@ class Video(Base):
     chat_transcript_path = Column(String)  # chat_transcript.json
     video_emotions_path = Column(String)  # video_emotions.json
     audio_laughs_path = Column(String)  # audio_laughs.json
+    highlight_descriptions_path = Column(String)  # highlight_descriptions.json
     processed_at = Column(DateTime, default=datetime.datetime.utcnow)
 
 def create_tables():
@@ -36,7 +50,7 @@ def extract_video_id_from_url(vod_url):
 
 def add_or_update_video(vod_url, video_path=None, audio_path=None, chat_csv_path=None, 
                        chat_json_path=None, chat_transcript_path=None, video_emotions_path=None, 
-                       audio_laughs_path=None):
+                       audio_laughs_path=None, highlight_descriptions_path=None):
     """Add new video or update existing video with new paths"""
     session = Session()
     try:
@@ -61,6 +75,8 @@ def add_or_update_video(vod_url, video_path=None, audio_path=None, chat_csv_path
                 existing_video.video_emotions_path = video_emotions_path
             if audio_laughs_path:
                 existing_video.audio_laughs_path = audio_laughs_path
+            if highlight_descriptions_path:
+                existing_video.highlight_descriptions_path = highlight_descriptions_path
             existing_video.processed_at = datetime.datetime.utcnow()
             print(f"Updated video {video_id} in database")
         else:
@@ -74,7 +90,8 @@ def add_or_update_video(vod_url, video_path=None, audio_path=None, chat_csv_path
                 chat_json_path=chat_json_path,
                 chat_transcript_path=chat_transcript_path,
                 video_emotions_path=video_emotions_path,
-                audio_laughs_path=audio_laughs_path
+                audio_laughs_path=audio_laughs_path,
+                highlight_descriptions_path=highlight_descriptions_path
             )
             session.add(video)
             print(f"Added new video {video_id} to database")
@@ -104,6 +121,7 @@ def get_video_paths(video_id):
                 'chat_transcript_path': video.chat_transcript_path,
                 'video_emotions_path': video.video_emotions_path,
                 'audio_laughs_path': video.audio_laughs_path,
+                'highlight_descriptions_path': video.highlight_descriptions_path,
                 'processed_at': video.processed_at
             }
         else:
@@ -147,6 +165,8 @@ def update_file_path(video_id, **file_paths):
                 video.video_emotions_path = file_paths['video_emotions_path']
             if 'audio_laughs_path' in file_paths:
                 video.audio_laughs_path = file_paths['audio_laughs_path']
+            if 'highlight_descriptions_path' in file_paths:
+                video.highlight_descriptions_path = file_paths['highlight_descriptions_path']
             
             session.commit()
             print(f"Updated file paths for video {video_id}: {list(file_paths.keys())}")
@@ -174,6 +194,7 @@ def list_all_videos():
             'chat_transcript_path': v.chat_transcript_path,
             'video_emotions_path': v.video_emotions_path,
             'audio_laughs_path': v.audio_laughs_path,
+            'highlight_descriptions_path': v.highlight_descriptions_path,
             'processed_at': v.processed_at
         } for v in videos]
     finally:

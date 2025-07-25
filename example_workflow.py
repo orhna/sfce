@@ -11,6 +11,7 @@ This script demonstrates the new database-integrated workflow:
 from utils.utils import download_twitch_vod, chat_message_activity_to_json
 from utils.video import analyze_video_emotions_by_id
 from utils.audio import detect_audio_laughs_by_id, analyze_laugh_threshold_sensitivity
+from utils.segment_analysis import analyze_top_segments, analyze_segment_by_interval
 from utils.chat import process_chat_by_id
 from utils.db import list_all_videos, get_video_paths, create_tables
 
@@ -119,6 +120,21 @@ def main_workflow(vod_url):
     except Exception as e:
         print(f"❌ Error processing chat transcriptions: {e}")
     
+    # Step 6: Generate highlight descriptions using LangGraph (top 3 segments)
+    print(f"\n6. Generating AI highlight descriptions for video_id: {video_id}...")
+    try:
+        highlight_result = analyze_top_segments(video_id, top_n=3)
+        segments_analyzed = highlight_result['total_segments_analyzed']
+        print(f"✅ Highlight descriptions generated: {segments_analyzed} segments analyzed")
+        
+        # Show sample highlights
+        if highlight_result['highlights']:
+            print("Sample highlight descriptions:")
+            for interval, desc in list(highlight_result['highlights'].items())[:2]:
+                print(f"  {interval}: {desc['highlight_type']} - {desc['combined_description'][:100]}...")
+    except Exception as e:
+        print(f"❌ Error generating highlight descriptions: {e}")
+    
     print(f"\n=== Workflow completed for video_id: {video_id} ===")
     
     # Show file locations and database status
@@ -145,6 +161,7 @@ def show_processing_summary(video_id):
     print(f"🎭 Video Emotions: {'✅' if paths['video_emotions_path'] else '❌'} {paths['video_emotions_path'] or 'Not available'}")
     print(f"😂 Audio Laughs: {'✅' if paths['audio_laughs_path'] else '❌'} {paths['audio_laughs_path'] or 'Not available'}")
     print(f"📝 Chat Transcript: {'✅' if paths['chat_transcript_path'] else '❌'} {paths['chat_transcript_path'] or 'Not available'}")
+    print(f"🤖 AI Highlights: {'✅' if paths['highlight_descriptions_path'] else '❌'} {paths['highlight_descriptions_path'] or 'Not available'}")
 
 
 def list_processed_videos():
@@ -169,6 +186,7 @@ def list_processed_videos():
         print(f"    Video Emotions: {'✅' if video['video_emotions_path'] else '❌'}")
         print(f"    Audio Laughs: {'✅' if video['audio_laughs_path'] else '❌'}")
         print(f"    Chat Transcript: {'✅' if video['chat_transcript_path'] else '❌'}")
+        print(f"    AI Highlights: {'✅' if video['highlight_descriptions_path'] else '❌'}")
 
 
 def quick_analysis(video_id):
@@ -219,6 +237,55 @@ def test_laugh_thresholds(video_id):
         print(f"❌ Error testing thresholds: {e}")
 
 
+def analyze_highlights(video_id, top_n=5):
+    """Generate AI-powered highlight descriptions for top segments."""
+    print(f"=== Generating AI Highlight Descriptions for {video_id} ===")
+    
+    try:
+        result = analyze_top_segments(video_id, top_n=top_n)
+        
+        if result['highlights']:
+            print(f"\n🎯 Generated {result['total_segments_analyzed']} highlight descriptions:")
+            
+            for interval, desc in result['highlights'].items():
+                print(f"\n⏰ {interval} - {desc['highlight_type'].upper()}")
+                print(f"   💬 Chat: {desc['chat_summary'][:80]}...")
+                print(f"   🎵 Audio: {desc['audio_summary'][:80]}...")
+                print(f"   ⭐ Description: {desc['combined_description']}")
+                print(f"   📊 Confidence: {desc['confidence_score']:.2f}")
+                print(f"   🏷️ Keywords: {', '.join(desc['keywords'])}")
+        else:
+            print("❌ No highlights generated")
+        
+        print(f"\n📁 Results saved to: {result.get('output_file', 'Not saved')}")
+        
+    except Exception as e:
+        print(f"❌ Error generating highlights: {e}")
+
+
+def analyze_specific_interval(video_id, interval):
+    """Analyze a specific time interval for highlight worthiness."""
+    print(f"=== Analyzing Specific Interval {interval} for {video_id} ===")
+    
+    try:
+        result = analyze_segment_by_interval(video_id, interval)
+        
+        if 'highlight_description' in result:
+            desc = result['highlight_description']
+            print(f"\n🎯 Highlight Analysis for {interval}:")
+            print(f"   Type: {desc['highlight_type']}")
+            print(f"   💬 Chat Summary: {desc['chat_summary']}")
+            print(f"   🎵 Audio Summary: {desc['audio_summary']}")
+            print(f"   ⭐ Description: {desc['combined_description']}")
+            print(f"   📊 Confidence: {desc['confidence_score']:.2f}")
+            print(f"   🏷️ Keywords: {', '.join(desc['keywords'])}")
+        else:
+            print(f"❌ Failed to analyze interval: {result.get('error', 'Unknown error')}")
+        
+    except Exception as e:
+        print(f"❌ Error analyzing interval: {e}")
+
+
 if __name__ == "__main__":
     # Example usage
     import sys
@@ -229,11 +296,15 @@ if __name__ == "__main__":
         print("  python example_workflow.py --list                      # List processed videos")
         print("  python example_workflow.py --quick <video_id>          # Quick analysis on existing video")
         print("  python example_workflow.py --test-thresholds <video_id> # Test laugh detection thresholds")
+        print("  python example_workflow.py --highlights <video_id> [n] # Generate AI highlight descriptions")
+        print("  python example_workflow.py --analyze <video_id> <interval> # Analyze specific interval")
         print("  python example_workflow.py --setup                     # Setup database only")
         print("\nExample:")
         print("  python example_workflow.py https://www.twitch.tv/videos/2465574148")
         print("  python example_workflow.py --quick 2465574148")
         print("  python example_workflow.py --test-thresholds 2465574148")
+        print("  python example_workflow.py --highlights 2465574148 5")
+        print("  python example_workflow.py --analyze 2465574148 267:00-267:05")
         sys.exit(1)
     
     if sys.argv[1] == "--list":
@@ -246,6 +317,14 @@ if __name__ == "__main__":
     elif sys.argv[1] == "--test-thresholds" and len(sys.argv) > 2:
         video_id = sys.argv[2]
         test_laugh_thresholds(video_id)
+    elif sys.argv[1] == "--highlights" and len(sys.argv) > 2:
+        video_id = sys.argv[2]
+        top_n = int(sys.argv[3]) if len(sys.argv) > 3 else 5
+        analyze_highlights(video_id, top_n)
+    elif sys.argv[1] == "--analyze" and len(sys.argv) > 3:
+        video_id = sys.argv[2]
+        interval = sys.argv[3]
+        analyze_specific_interval(video_id, interval)
     else:
         vod_url = sys.argv[1]
         main_workflow(vod_url) 

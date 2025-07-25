@@ -1,0 +1,14 @@
+# Configuration files with sensitive data
+config.py
+
+# Python cache files
+__pycache__/
+
+# Data files (you may want to include some of these)
+*.mp4
+*.wav
+*.csv
+*.json 
+
+# custom 
+LANGGRAPH_USECASES.md
