@@ -52,7 +52,7 @@ class SegmentAnalysisState(BaseModel):
     """State for the LangGraph workflow."""
     video_id: str
     time_interval: str
-    chat_messages: List[Dict[str, Any]]
+    chat_messages: List[Dict[str, Any]] = []
     audio_transcription: Optional[str] = None
     chat_summary: Optional[str] = None
     audio_summary: Optional[str] = None
@@ -185,23 +185,44 @@ def find_top_chat_intervals(chat_activity: Dict, top_n: int = 5) -> List[tuple]:
     intervals.sort(key=lambda x: x[1], reverse=True)
     return intervals[:top_n]
 
+def parse_time_to_seconds(time_str):
+    """Parse time string to seconds, handling both MM:SS and H:MM:SS formats"""
+    parts = time_str.split(':')
+    if len(parts) == 2:
+        # MM:SS format
+        minutes, seconds = map(int, parts)
+        return minutes * 60 + seconds
+    elif len(parts) == 3:
+        # H:MM:SS format
+        hours, minutes, seconds = map(int, parts)
+        return hours * 3600 + minutes * 60 + seconds
+    else:
+        raise ValueError(f'Invalid time format: {time_str}')
+    
 def parse_time_interval(interval: str) -> tuple[int, int]:
     """
     Parse time interval string to start and end seconds.
-    
-    Args:
-        interval: Time interval in format "MM:SS-MM:SS"
-    
-    Returns:
-        tuple: (start_seconds, end_seconds)
+    Handles intervals that might be in different formats.
     """
     start_str, end_str = interval.split('-')
     
-    def time_to_seconds(time_str):
-        minutes, seconds = map(int, time_str.split(':'))
-        return minutes * 60 + seconds
+    # Handle the case where interval is in MM:SS format but should be H:MM:SS
+    # Convert MM:SS to H:MM:SS if minutes > 59
+    def convert_if_needed(time_str):
+        parts = time_str.split(':')
+        if len(parts) == 2:
+            minutes, seconds = map(int, parts)
+            if minutes >= 60:
+                # Convert to H:MM:SS format
+                hours = minutes // 60
+                mins = minutes % 60
+                return f"{hours}:{mins:02d}:{seconds:02d}"
+        return time_str
     
-    return time_to_seconds(start_str), time_to_seconds(end_str)
+    start_str = convert_if_needed(start_str)
+    end_str = convert_if_needed(end_str)
+    
+    return parse_time_to_seconds(start_str), parse_time_to_seconds(end_str)
 
 def get_messages_in_interval(chat_messages: List[Dict], interval: str) -> List[Dict]:
     """
@@ -215,22 +236,12 @@ def get_messages_in_interval(chat_messages: List[Dict], interval: str) -> List[D
             # Parse timestamp from chat CSV
             timestamp_str = message.get('Timestamp', '')
             if timestamp_str:
-                # Handle different timestamp formats
-                if '.' in timestamp_str:
-                    # Remove microseconds if present
-                    timestamp_str = timestamp_str.split('.')[0]
-                
-                # Parse datetime
                 try:
-                    timestamp = datetime.fromisoformat(timestamp_str.replace('Z', '+00:00'))
-                    # Convert to seconds from start of stream (this is approximate)
-                    # You might need to adjust this based on your timestamp format
-                    message_seconds = timestamp.hour * 3600 + timestamp.minute * 60 + timestamp.second
-                    
+                    message_seconds = parse_time_to_seconds(timestamp_str)
                     if start_sec <= message_seconds <= end_sec:
                         interval_messages.append(message)
-                except Exception:
-                    # If timestamp parsing fails, skip this message
+                except ValueError:
+                    # Skip messages with invalid timestamps
                     continue
         except Exception:
             continue
@@ -363,16 +374,29 @@ def generate_highlight_description(state: SegmentAnalysisState) -> SegmentAnalys
         
         highlight_prompt = ChatPromptTemplate.from_template("""
         Based on the chat and audio analysis below, generate a highlight description for this streaming moment:
-        
+
         Time Interval: {time_interval}
         Chat Summary: {chat_summary}
         Audio Summary: {audio_summary}
         Number of Chat Messages: {message_count}
-        
+
         Create a comprehensive highlight description that combines both the chat activity and audio content.
         Consider what type of moment this represents (funny, exciting, dramatic, skillful, etc.).
-        
+
+        IMPORTANT: Return ONLY the JSON object with actual values, not a schema definition.
+
         {format_instructions}
+
+        Example of expected output:
+        {{
+        "time_interval": "267:00-267:05",
+        "highlight_type": "funny",
+        "chat_summary": "Chat was laughing and spamming emotes",
+        "audio_summary": "Streamer made a joke",
+        "combined_description": "Funny moment where streamer's joke caused chat to explode with laughter",
+        "confidence_score": 0.8,
+        "keywords": ["funny", "joke", "laughter"]
+        }}
         """)
         
         chain = highlight_prompt | llm | parser
@@ -470,12 +494,25 @@ def analyze_top_segments(video_id: str, top_n: int = 5) -> Dict[str, Any]:
             # Run workflow
             final_state = workflow.invoke(state)
             
-            # Store result
-            if final_state.highlight_description:
-                highlights[interval] = final_state.highlight_description.dict()
+            # Handle both dict and SegmentAnalysisState returns
+            if isinstance(final_state, dict):
+                # LangGraph returned a dict
+                highlight_desc = final_state.get('highlight_description')
+                errors = final_state.get('errors', [])
+            else:
+                # LangGraph returned a SegmentAnalysisState object
+                highlight_desc = final_state.highlight_description
+                errors = final_state.errors
             
-            if final_state.errors:
-                print(f"Errors during analysis: {final_state.errors}")
+            # Store result
+            if highlight_desc:
+                if hasattr(highlight_desc, 'dict'):
+                    highlights[interval] = highlight_desc.dict()
+                else:
+                    highlights[interval] = highlight_desc
+            
+            if errors:
+                print(f"Errors during analysis: {errors}")
         
         # Save results
         paths = get_video_paths(video_id)
@@ -534,21 +571,32 @@ def analyze_segment_by_interval(video_id: str, time_interval: str) -> Dict[str, 
         # Run workflow
         final_state = workflow.invoke(state)
         
-        if final_state.highlight_description:
-            result = final_state.highlight_description.dict()
+        # Handle both dict and SegmentAnalysisState returns
+        if isinstance(final_state, dict):
+            highlight_desc = final_state.get('highlight_description')
+            errors = final_state.get('errors', [])
+        else:
+            highlight_desc = final_state.highlight_description
+            errors = final_state.errors
+        
+        if highlight_desc:
+            if hasattr(highlight_desc, 'dict'):
+                result = highlight_desc.dict()
+            else:
+                result = highlight_desc
             print(f"✅ Analysis complete for interval {time_interval}")
             return {
                 "video_id": video_id,
                 "interval": time_interval,
                 "highlight_description": result,
-                "errors": final_state.errors
+                "errors": errors
             }
         else:
             return {
                 "video_id": video_id,
                 "interval": time_interval,
                 "error": "Failed to generate highlight description",
-                "errors": final_state.errors
+                "errors": errors
             }
         
     except Exception as e:
