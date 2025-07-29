@@ -166,7 +166,7 @@ def analyze_video_emotions(video_path, interval_sec=5, time_period=None, output_
     
     # Update database with video emotions path
     try:
-        from .create_db import update_file_path
+        from .db import update_file_path
         # Extract just the video ID number if filename has 'twitch_' prefix
         db_video_id = video_id.replace('twitch_', '') if video_id.startswith('twitch_') else video_id
         update_file_path(db_video_id, video_emotions_path=output_json_path)

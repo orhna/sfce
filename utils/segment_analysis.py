@@ -34,6 +34,13 @@ try:
 except ImportError:
     OLLAMA_AVAILABLE = False
 
+try:
+    from langchain_community.chat_models import QianfanChatEndpoint
+    # For Qwen models, we can also use OpenAI-compatible endpoints
+    QWEN_AVAILABLE = True
+except ImportError:
+    QWEN_AVAILABLE = False
+
 # Local imports
 from .db import get_video_paths, update_file_path
 
@@ -49,32 +56,41 @@ class HighlightDescription(BaseModel):
     keywords: List[str] = Field(description="Key words/phrases that make this moment interesting")
 
 class SegmentAnalysisState(BaseModel):
-    """State for the LangGraph workflow."""
+    """State for segment analysis workflow."""
     video_id: str
     time_interval: str
-    chat_messages: List[Dict[str, Any]] = []
-    audio_transcription: Optional[str] = None
+    chat_messages: List[Dict[str, Any]] = []  # Made optional with default
+    audio_transcription: Optional[Dict[str, Any]] = None
     chat_summary: Optional[str] = None
     audio_summary: Optional[str] = None
     highlight_description: Optional[HighlightDescription] = None
     errors: List[str] = []
 
 def initialize_llm():
-    """Initialize the best available LLM in order of preference."""
+    """Initialize the best available LLM in order of preference: OpenAI -> Qwen -> Ollama."""
     
     # Try to load configuration
     try:
         import sys
         sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
-        from config import OLLAMA_MODEL, OLLAMA_BASE_URL
-        configured_model = OLLAMA_MODEL
-        ollama_base_url = OLLAMA_BASE_URL
+        import config
+        configured_ollama_model = getattr(config, 'OLLAMA_MODEL', 'llama3.2:3b')
+        ollama_base_url = getattr(config, 'OLLAMA_BASE_URL', 'http://localhost:11434')
+        qwen_api_key = getattr(config, 'QWEN_API_KEY', None)
+        qwen_base_url = getattr(config, 'QWEN_BASE_URL', 'https://dashscope.aliyuncs.com/compatible-mode/v1')
+        qwen_model = getattr(config, 'QWEN_MODEL', 'qwen-plus')
     except ImportError:
-        configured_model = "llama3.2:3b"
+        configured_ollama_model = "llama3.2:3b"
         ollama_base_url = "http://localhost:11434"
+        qwen_api_key = None
+        qwen_base_url = "https://dashscope.aliyuncs.com/compatible-mode/v1"
+        qwen_model = "qwen-plus"
     except AttributeError:
-        configured_model = "llama3.2:3b"
+        configured_ollama_model = "llama3.2:3b"
         ollama_base_url = "http://localhost:11434"
+        qwen_api_key = None
+        qwen_base_url = "https://dashscope.aliyuncs.com/compatible-mode/v1"
+        qwen_model = "qwen-plus"
     
     # Try OpenAI first (if API key is available)
     openai_key = os.getenv("OPENAI_API_KEY")
@@ -93,11 +109,34 @@ def initialize_llm():
         except Exception as e:
             print(f"⚠️ OpenAI failed: {e}")
     
-    # Try Ollama as fallback
+    # Try Qwen next (if API key is available)
+    if not qwen_api_key:
+        qwen_api_key = os.getenv("QWEN_API_KEY") or os.getenv("DASHSCOPE_API_KEY")
+    
+    if QWEN_AVAILABLE and qwen_api_key:
+        try:
+            # Use OpenAI-compatible endpoint for Qwen
+            llm = ChatOpenAI(
+                model=qwen_model,
+                temperature=0.3,
+                api_key=qwen_api_key,
+                base_url=qwen_base_url
+            )
+            # Test the connection
+            test_response = llm.invoke([HumanMessage(content="Hello")])
+            print(f"✅ Using Qwen model: {qwen_model}")
+            return llm, True
+        except Exception as e:
+            print(f"⚠️ Qwen failed: {e}")
+    
+    # Try Ollama as final fallback
     if OLLAMA_AVAILABLE:
         # List of models to try in order of preference
         models_to_try = [
-            configured_model,  # User's configured model
+            configured_ollama_model,  # User's configured model
+            "qwen2.5:3b",      # Qwen 3B - Good balance for highlights
+            "qwen2.5:1.5b",    # Qwen 1.5B - Faster option
+            "qwen2.5:7b",      # Qwen 7B - Higher quality
             "llama3.2:3b",     # Good balance of speed and quality
             "llama3.2:1b",     # Smaller, faster model
             "llama3.1:8b",     # Alternative model
@@ -124,17 +163,16 @@ def initialize_llm():
                 print(f"⚠️ Ollama with {model} failed: {e}")
                 continue
     
-    print("❌ No LLM available. Install Ollama or set OPENAI_API_KEY")
+    print("❌ No LLM available. Install Ollama, set OPENAI_API_KEY, or configure Qwen")
     print("\n🔧 Setup Instructions:")
-    print("Option 1 - Ollama (Recommended for local use):")
+    print("Option 1 - OpenAI:")
+    print("  Set OPENAI_API_KEY environment variable")
+    print("\nOption 2 - Qwen (Alibaba Cloud):")
+    print("  1. Get API key from: https://dashscope.console.aliyun.com/")
+    print("  2. Set QWEN_API_KEY or DASHSCOPE_API_KEY environment variable")
+    print("  3. Available models: qwen-plus, qwen-turbo, qwen-max, etc.")
+    print("\nOption 3 - Ollama (Local/Free):")
     print("  1. Install Ollama: https://ollama.ai/download")
-    print("  2. Run: ollama pull llama3.2:3b")
-    print("  3. Start Ollama service: ollama serve")
-    print("  4. Or run setup script: python setup_local_llm.py")
-    print("\nOption 2 - OpenAI:")
-    print("  1. Get API key from https://platform.openai.com/")
-    print("  2. Set in config.py: OPENAI_API_KEY='your-key-here'")
-    print("  3. Or set environment: export OPENAI_API_KEY='your-key-here'")
     
     return None, False
 
@@ -606,3 +644,610 @@ def analyze_segment_by_interval(video_id: str, time_interval: str) -> Dict[str, 
             "interval": time_interval,
             "error": str(e)
         } 
+
+
+# ================================================================================================
+# MULTI-MODAL HIGHLIGHT SCORING & RANKING SYSTEM
+# ================================================================================================
+
+class MultiModalScore(BaseModel):
+    """Model for multi-modal scoring output."""
+    time_interval: str = Field(description="Time interval")
+    chat_score: float = Field(description="Chat activity score (0.0-1.0)")
+    emotion_score: float = Field(description="Video emotion score (0.0-1.0)")
+    laugh_score: float = Field(description="Audio laugh score (0.0-1.0)")
+    transcription_score: float = Field(description="Audio transcription quality score (0.0-1.0)")
+    combined_score: float = Field(description="Weighted combined score (0.0-1.0)")
+    highlight_type: str = Field(description="Type of highlight based on dominant signals")
+    reasoning: str = Field(description="Explanation of why this moment scored highly")
+
+class MultiModalAnalysisState(BaseModel):
+    """State for the multi-modal analysis workflow."""
+    video_id: str
+    time_interval: str
+    interval_data_dir: str  # Directory containing all interval-specific JSON files
+    
+    # Raw data
+    chat_activity_count: int = 0
+    chat_messages: List[Dict[str, Any]] = []
+    video_emotions: List[Dict[str, Any]] = []
+    audio_laughs: List[Dict[str, Any]] = []
+    audio_transcription: Optional[str] = None
+    
+    # Individual scores
+    chat_score: float = 0.0
+    emotion_score: float = 0.0
+    laugh_score: float = 0.0
+    transcription_score: float = 0.0
+    
+    # Final result
+    multi_modal_score: Optional[MultiModalScore] = None
+    errors: List[str] = []
+
+def load_multi_modal_data(video_id: str, time_interval: str, interval_data_dir: str) -> Dict[str, Any]:
+    """Load all multi-modal data for a specific interval."""
+    data = {
+        'chat_activity_count': 0,
+        'chat_messages': [],
+        'video_emotions': [],
+        'audio_laughs': [],
+        'audio_transcription': None
+    }
+    
+    try:
+        # Load chat activity
+        chat_activity_path = os.path.join(interval_data_dir, 'chat_activity.json')
+        if os.path.exists(chat_activity_path):
+            with open(chat_activity_path, 'r', encoding='utf-8') as f:
+                chat_activity = json.load(f)
+                data['chat_activity_count'] = chat_activity.get(time_interval, 0)
+        
+        # Load chat messages (from CSV)
+        paths = get_video_paths(video_id)
+        if paths and paths['chat_csv_path'] and os.path.exists(paths['chat_csv_path']):
+            with open(paths['chat_csv_path'], 'r', encoding='utf-8') as f:
+                reader = csv.DictReader(f)
+                all_messages = list(reader)
+                data['chat_messages'] = get_messages_in_interval(all_messages, time_interval)
+        
+        # Load video emotions
+        emotions_path = os.path.join(interval_data_dir, 'video_emotions.json')
+        if os.path.exists(emotions_path):
+            with open(emotions_path, 'r', encoding='utf-8') as f:
+                emotions_data = json.load(f)
+                emotion_value = emotions_data.get(time_interval, [])
+                
+                # Convert string emotion to list format
+                if isinstance(emotion_value, str):
+                    if emotion_value == "no_face":
+                        data['video_emotions'] = []
+                    else:
+                        data['video_emotions'] = [{'emotion': emotion_value, 'confidence': 0.8}]
+                elif isinstance(emotion_value, list):
+                    data['video_emotions'] = emotion_value
+                else:
+                    data['video_emotions'] = []
+        
+        # Load audio laughs
+        laughs_path = os.path.join(interval_data_dir, 'audio_laughs.json')
+        if os.path.exists(laughs_path):
+            with open(laughs_path, 'r', encoding='utf-8') as f:
+                laughs_data = json.load(f)
+                laugh_value = laughs_data.get(time_interval, [])
+                
+                # Convert boolean laugh to list format
+                if isinstance(laugh_value, bool):
+                    if laugh_value:
+                        data['audio_laughs'] = [{'confidence': 0.7, 'detected': True}]
+                    else:
+                        data['audio_laughs'] = []
+                elif isinstance(laugh_value, list):
+                    data['audio_laughs'] = laugh_value
+                else:
+                    data['audio_laughs'] = []
+        
+        # Load audio transcription
+        transcription_path = os.path.join(interval_data_dir, 'chat_transcriptions.json')
+        if os.path.exists(transcription_path):
+            with open(transcription_path, 'r', encoding='utf-8') as f:
+                transcription_data = json.load(f)
+                interval_transcription = transcription_data.get(time_interval)
+                if isinstance(interval_transcription, dict):
+                    data['audio_transcription'] = interval_transcription.get('text', '')
+                else:
+                    data['audio_transcription'] = str(interval_transcription) if interval_transcription else None
+    
+    except Exception as e:
+        print(f"Error loading multi-modal data: {e}")
+    
+    return data
+
+# LangGraph workflow nodes for multi-modal analysis
+def extract_multi_modal_data(state: MultiModalAnalysisState) -> MultiModalAnalysisState:
+    """Extract all multi-modal data for the interval."""
+    try:
+        data = load_multi_modal_data(state.video_id, state.time_interval, state.interval_data_dir)
+        
+        state.chat_activity_count = data['chat_activity_count']
+        state.chat_messages = data['chat_messages']
+        state.video_emotions = data['video_emotions']
+        state.audio_laughs = data['audio_laughs']
+        state.audio_transcription = data['audio_transcription']
+        
+        print(f"✓ Loaded multi-modal data: {len(state.chat_messages)} chat, {len(state.video_emotions)} emotions, {len(state.audio_laughs)} laughs")
+        
+    except Exception as e:
+        error_msg = f"Error extracting multi-modal data: {e}"
+        state.errors.append(error_msg)
+        print(f"❌ {error_msg}")
+    
+    return state
+
+def score_chat_activity(state: MultiModalAnalysisState) -> MultiModalAnalysisState:
+    """Score chat activity based on message count and content."""
+    try:
+        # Base score from message count (normalize to 0-1)
+        message_count = len(state.chat_messages)
+        count_score = min(message_count / 50.0, 1.0)  # Cap at 50 messages = 1.0
+        
+        # Content quality score (emotes, excitement indicators)
+        if message_count > 0:
+            excitement_keywords = ['lol', 'lmao', 'kekw', 'omg', 'wow', 'pog', 'hype', '!!!']
+            emote_patterns = ['lul', 'kappa', 'pepega', 'monka', 'pog']
+            
+            excitement_count = 0
+            for msg in state.chat_messages:
+                content = msg.get('Message', '').lower()
+                if any(keyword in content for keyword in excitement_keywords):
+                    excitement_count += 1
+                if any(emote in content for emote in emote_patterns):
+                    excitement_count += 1
+            
+            content_score = min(excitement_count / message_count, 1.0) if message_count > 0 else 0.0
+        else:
+            content_score = 0.0
+        
+        # Combined chat score (weighted)
+        state.chat_score = (count_score * 0.7) + (content_score * 0.3)
+        print(f"✓ Chat score: {state.chat_score:.3f} (count: {count_score:.3f}, content: {content_score:.3f})")
+        
+    except Exception as e:
+        error_msg = f"Error scoring chat activity: {e}"
+        state.errors.append(error_msg)
+        print(f"❌ {error_msg}")
+        state.chat_score = 0.0
+    
+    return state
+
+def score_video_emotions(state: MultiModalAnalysisState) -> MultiModalAnalysisState:
+    """Score video emotions based on detected emotions."""
+    try:
+        if not state.video_emotions:
+            state.emotion_score = 0.0
+            print("✓ Emotion score: 0.000 (no emotions detected)")
+            return state
+        
+        # Score based on emotion intensity and variety
+        positive_emotions = ['happy', 'surprise', 'joy', 'excited']
+        negative_emotions = ['angry', 'fear', 'disgust', 'sad']
+        
+        total_intensity = 0.0
+        emotion_variety = set()
+        
+        for emotion_data in state.video_emotions:
+            if isinstance(emotion_data, dict):
+                emotion = emotion_data.get('emotion', '').lower()
+                confidence = emotion_data.get('confidence', 0.0)
+                
+                emotion_variety.add(emotion)
+                
+                # Weight positive emotions higher for highlights
+                if emotion in positive_emotions:
+                    total_intensity += confidence * 1.2
+                elif emotion in negative_emotions:
+                    total_intensity += confidence * 0.8
+                else:
+                    total_intensity += confidence
+        
+        # Normalize and boost for variety
+        avg_intensity = total_intensity / len(state.video_emotions) if state.video_emotions else 0.0
+        variety_boost = min(len(emotion_variety) / 5.0, 1.0) * 0.2  # Up to 20% boost for variety
+        
+        state.emotion_score = min(avg_intensity + variety_boost, 1.0)
+        print(f"✓ Emotion score: {state.emotion_score:.3f} (intensity: {avg_intensity:.3f}, variety: {len(emotion_variety)})")
+        
+    except Exception as e:
+        error_msg = f"Error scoring video emotions: {e}"
+        state.errors.append(error_msg)
+        print(f"❌ {error_msg}")
+        state.emotion_score = 0.0
+    
+    return state
+
+def score_audio_laughs(state: MultiModalAnalysisState) -> MultiModalAnalysisState:
+    """Score audio laughs based on detected laughter."""
+    try:
+        if not state.audio_laughs:
+            state.laugh_score = 0.0
+            print("✓ Laugh score: 0.000 (no laughs detected)")
+            return state
+        
+        # Score based on laugh count and confidence
+        total_confidence = 0.0
+        laugh_count = len(state.audio_laughs)
+        
+        for laugh_data in state.audio_laughs:
+            if isinstance(laugh_data, dict):
+                confidence = laugh_data.get('confidence', 0.0)
+                total_confidence += confidence
+        
+        # Normalize and apply count bonus
+        avg_confidence = total_confidence / laugh_count if laugh_count > 0 else 0.0
+        count_bonus = min(laugh_count / 10.0, 1.0) * 0.3  # Up to 30% bonus for multiple laughs
+        
+        state.laugh_score = min(avg_confidence + count_bonus, 1.0)
+        print(f"✓ Laugh score: {state.laugh_score:.3f} (confidence: {avg_confidence:.3f}, count: {laugh_count})")
+        
+    except Exception as e:
+        error_msg = f"Error scoring audio laughs: {e}"
+        state.errors.append(error_msg)
+        print(f"❌ {error_msg}")
+        state.laugh_score = 0.0
+    
+    return state
+
+def score_audio_transcription(state: MultiModalAnalysisState) -> MultiModalAnalysisState:
+    """Score audio transcription based on content quality and excitement."""
+    try:
+        if not state.audio_transcription:
+            state.transcription_score = 0.0
+            print("✓ Transcription score: 0.000 (no transcription)")
+            return state
+        
+        text = state.audio_transcription.lower()
+        
+        # Score based on excitement keywords and patterns
+        excitement_words = ['amazing', 'incredible', 'unbelievable', 'wow', 'omg', 'insane', 'clutch', 'epic']
+        reaction_words = ['yes!', 'no way', 'what!', 'how!', 'damn', 'sick', 'poggers']
+        
+        excitement_score = sum(1 for word in excitement_words if word in text) / 10.0
+        reaction_score = sum(1 for word in reaction_words if word in text) / 5.0
+        
+        # Length bonus (longer transcriptions often mean more content)
+        length_score = min(len(text.split()) / 50.0, 1.0) * 0.3
+        
+        state.transcription_score = min(excitement_score + reaction_score + length_score, 1.0)
+        print(f"✓ Transcription score: {state.transcription_score:.3f} (excitement: {excitement_score:.3f}, reactions: {reaction_score:.3f})")
+        
+    except Exception as e:
+        error_msg = f"Error scoring audio transcription: {e}"
+        state.errors.append(error_msg)
+        print(f"❌ {error_msg}")
+        state.transcription_score = 0.0
+    
+    return state
+
+def combine_multi_modal_scores(state: MultiModalAnalysisState) -> MultiModalAnalysisState:
+    """Combine all scores into a final multi-modal score."""
+    try:
+        # Weighted combination of scores
+        weights = {
+            'chat': 0.3,      # Chat activity is important for engagement
+            'emotion': 0.25,  # Visual emotions show reaction
+            'laugh': 0.3,     # Laughter is a strong highlight indicator
+            'transcription': 0.15  # Audio content provides context
+        }
+        
+        combined_score = (
+            state.chat_score * weights['chat'] +
+            state.emotion_score * weights['emotion'] +
+            state.laugh_score * weights['laugh'] +
+            state.transcription_score * weights['transcription']
+        )
+        
+        # Determine highlight type based on dominant signals
+        scores = {
+            'chat': state.chat_score,
+            'emotion': state.emotion_score,
+            'laugh': state.laugh_score,
+            'transcription': state.transcription_score
+        }
+        
+        dominant_signal = max(scores, key=scores.get)
+        highlight_types = {
+            'chat': 'high_engagement',
+            'emotion': 'emotional_moment',
+            'laugh': 'funny_moment',
+            'transcription': 'content_rich'
+        }
+        
+        highlight_type = highlight_types.get(dominant_signal, 'mixed_moment')
+        
+        # Generate reasoning
+        reasoning_parts = []
+        if state.chat_score > 0.6:
+            reasoning_parts.append(f"High chat activity ({len(state.chat_messages)} messages)")
+        if state.emotion_score > 0.6:
+            reasoning_parts.append(f"Strong emotional reactions detected")
+        if state.laugh_score > 0.6:
+            reasoning_parts.append(f"Multiple laugh instances ({len(state.audio_laughs)} laughs)")
+        if state.transcription_score > 0.6:
+            reasoning_parts.append(f"Exciting audio content detected")
+        
+        reasoning = "; ".join(reasoning_parts) if reasoning_parts else "Moderate activity across multiple signals"
+        
+        # Create final score object
+        state.multi_modal_score = MultiModalScore(
+            time_interval=state.time_interval,
+            chat_score=state.chat_score,
+            emotion_score=state.emotion_score,
+            laugh_score=state.laugh_score,
+            transcription_score=state.transcription_score,
+            combined_score=combined_score,
+            highlight_type=highlight_type,
+            reasoning=reasoning
+        )
+        
+        print(f"✓ Combined score: {combined_score:.3f} ({highlight_type})")
+        
+    except Exception as e:
+        error_msg = f"Error combining multi-modal scores: {e}"
+        state.errors.append(error_msg)
+        print(f"❌ {error_msg}")
+    
+    return state
+
+def create_multi_modal_analysis_graph():
+    """Create the LangGraph workflow for multi-modal analysis."""
+    workflow = StateGraph(MultiModalAnalysisState)
+    
+    # Add nodes
+    workflow.add_node("extract_data", extract_multi_modal_data)
+    workflow.add_node("score_chat", score_chat_activity)
+    workflow.add_node("score_emotions", score_video_emotions)
+    workflow.add_node("score_laughs", score_audio_laughs)
+    workflow.add_node("score_transcription", score_audio_transcription)
+    workflow.add_node("combine_scores", combine_multi_modal_scores)
+    
+    # Add edges
+    workflow.add_edge("extract_data", "score_chat")
+    workflow.add_edge("score_chat", "score_emotions")
+    workflow.add_edge("score_emotions", "score_laughs")
+    workflow.add_edge("score_laughs", "score_transcription")
+    workflow.add_edge("score_transcription", "combine_scores")
+    workflow.add_edge("combine_scores", END)
+    
+    # Set entry point
+    workflow.set_entry_point("extract_data")
+    
+    return workflow.compile()
+
+def analyze_multi_modal_highlights(video_id: str, interval_data_dir: str, top_n: int = 10) -> Dict[str, Any]:
+    """
+    Analyze intervals using smart filtering based on chat engagement with fallbacks for low-chat streams.
+    
+    Args:
+        video_id: Video ID to analyze
+        interval_data_dir: Directory containing interval-specific JSON files
+        top_n: Number of top highlights to return
+    
+    Returns:
+        Dictionary with ranked highlights and scores
+    """
+    print(f"🎯 Smart Multi-Modal Analysis for video {video_id}")
+    print(f"📁 Using interval data from: {interval_data_dir}")
+    
+    try:
+        # Load chat activity to get all intervals
+        chat_activity_path = os.path.join(interval_data_dir, 'chat_activity.json')
+        if not os.path.exists(chat_activity_path):
+            raise ValueError(f"Chat activity file not found: {chat_activity_path}")
+        
+        with open(chat_activity_path, 'r', encoding='utf-8') as f:
+            chat_activity = json.load(f)
+        
+        # Smart interval selection strategy
+        selected_intervals = smart_interval_selection(chat_activity, interval_data_dir)
+        
+        print(f"🧠 Smart selection: Analyzing {len(selected_intervals)} intervals (from {len(chat_activity)} total)")
+        
+        # Create workflow
+        workflow = create_multi_modal_analysis_graph()
+        
+        # Analyze selected intervals
+        all_scores = []
+        
+        for i, interval in enumerate(selected_intervals, 1):
+            print(f"\n--- Analyzing interval {interval} ({i}/{len(selected_intervals)}) ---")
+            
+            # Create initial state
+            state = MultiModalAnalysisState(
+                video_id=video_id,
+                time_interval=interval,
+                interval_data_dir=interval_data_dir
+            )
+            
+            # Run workflow
+            final_state = workflow.invoke(state)
+            
+            # Handle both dict and state object returns
+            if isinstance(final_state, dict):
+                multi_modal_score = final_state.get('multi_modal_score')
+                errors = final_state.get('errors', [])
+            else:
+                multi_modal_score = final_state.multi_modal_score
+                errors = final_state.errors
+            
+            # Store result
+            if multi_modal_score:
+                if hasattr(multi_modal_score, 'dict'):
+                    score_data = multi_modal_score.dict()
+                else:
+                    score_data = multi_modal_score
+                all_scores.append(score_data)
+            
+            if errors:
+                print(f"Errors during analysis: {errors}")
+        
+        # Sort by combined score
+        all_scores.sort(key=lambda x: x['combined_score'], reverse=True)
+        top_highlights = all_scores[:top_n]
+        
+        # Save results
+        output_path = os.path.join(interval_data_dir, "multi_modal_highlights.json")
+        with open(output_path, 'w', encoding='utf-8') as f:
+            json.dump({
+                'video_id': video_id,
+                'top_highlights': top_highlights,
+                'all_scores': all_scores,
+                'analysis_summary': {
+                    'total_intervals': len(chat_activity),
+                    'analyzed_intervals': len(all_scores),
+                    'selection_efficiency': f"{len(all_scores)}/{len(chat_activity)} ({100*len(all_scores)/len(chat_activity):.1f}%)",
+                    'top_score': top_highlights[0]['combined_score'] if top_highlights else 0.0,
+                    'avg_score': sum(s['combined_score'] for s in all_scores) / len(all_scores) if all_scores else 0.0
+                }
+            }, f, ensure_ascii=False, indent=2)
+        
+        print(f"\n✅ Smart multi-modal analysis complete!")
+        print(f"📊 Analyzed {len(all_scores)} intervals (selected from {len(chat_activity)} total)")
+        print(f"⚡ Efficiency: {100*len(all_scores)/len(chat_activity):.1f}% of intervals analyzed")
+        print(f"🏆 Top score: {top_highlights[0]['combined_score']:.3f}" if top_highlights else "🏆 No highlights found")
+        print(f"💾 Results saved to: {output_path}")
+        
+        return {
+            'video_id': video_id,
+            'top_highlights': top_highlights,
+            'output_file': output_path,
+            'total_intervals_analyzed': len(all_scores),
+            'total_intervals_available': len(chat_activity),
+            'selection_efficiency': len(all_scores) / len(chat_activity) if chat_activity else 0
+        }
+        
+    except Exception as e:
+        print(f"❌ Error during smart multi-modal analysis: {e}")
+        return {
+            'video_id': video_id,
+            'error': str(e),
+            'top_highlights': [],
+            'total_intervals_analyzed': 0
+        }
+
+
+def smart_interval_selection(chat_activity: Dict, interval_data_dir: str) -> List[str]:
+    """
+    Smart interval selection based on chat engagement with fallbacks for low-chat streams.
+    
+    Args:
+        chat_activity: Dictionary of intervals and their chat message counts
+        interval_data_dir: Directory containing emotion and laugh data
+    
+    Returns:
+        List of selected intervals to analyze
+    """
+    # Sort intervals by chat activity
+    sorted_chat = sorted(chat_activity.items(), key=lambda x: x[1], reverse=True)
+    total_intervals = len(sorted_chat)
+    
+    print(f"📊 Chat activity analysis:")
+    print(f"   Total intervals: {total_intervals}")
+    print(f"   Chat range: {sorted_chat[0][1]} to {sorted_chat[-1][1]} messages")
+    
+    # Strategy 1: High chat engagement streams
+    top_10_percent = max(1, int(total_intervals * 0.1))
+    high_chat_intervals = [interval for interval, count in sorted_chat[:top_10_percent] if count > 0]
+    
+    print(f"   Top 10% intervals: {len(high_chat_intervals)} (threshold: {sorted_chat[top_10_percent-1][1] if sorted_chat else 0} messages)")
+    
+    # Strategy 2: Low chat engagement fallback
+    if len(high_chat_intervals) < 5 or (sorted_chat[0][1] if sorted_chat else 0) < 10:
+        print(f"🔄 Low chat engagement detected, using fallback strategy...")
+        return low_chat_fallback_selection(chat_activity, interval_data_dir, top_10_percent)
+    
+    # Strategy 3: Filter high chat intervals by emotion and laugh signals
+    selected_intervals = filter_by_multimodal_signals(high_chat_intervals, interval_data_dir)
+    
+    print(f"✅ Selected {len(selected_intervals)} intervals for analysis")
+    return selected_intervals
+
+
+def low_chat_fallback_selection(chat_activity: Dict, interval_data_dir: str, min_intervals: int) -> List[str]:
+    """
+    Fallback selection for streams with low chat engagement.
+    Looks for any signals from emotions and laughs.
+    """
+    print(f"🎭 Low-chat fallback: Looking for emotion and laugh signals...")
+    
+    candidate_intervals = set()
+    
+    # Add any intervals with emotions (not "no_face")
+    emotions_path = os.path.join(interval_data_dir, 'video_emotions.json')
+    if os.path.exists(emotions_path):
+        with open(emotions_path, 'r', encoding='utf-8') as f:
+            emotions_data = json.load(f)
+        
+        emotion_intervals = [interval for interval, emotion in emotions_data.items() 
+                           if emotion != "no_face" and emotion != ""]
+        candidate_intervals.update(emotion_intervals)
+        print(f"   Found {len(emotion_intervals)} intervals with face emotions")
+    
+    # Add any intervals with laughs
+    laughs_path = os.path.join(interval_data_dir, 'audio_laughs.json')
+    if os.path.exists(laughs_path):
+        with open(laughs_path, 'r', encoding='utf-8') as f:
+            laughs_data = json.load(f)
+        
+        laugh_intervals = [interval for interval, has_laugh in laughs_data.items() 
+                          if has_laugh is True]
+        candidate_intervals.update(laugh_intervals)
+        print(f"   Found {len(laugh_intervals)} intervals with detected laughs")
+    
+    # If still not enough, add top chat intervals regardless of count
+    if len(candidate_intervals) < min_intervals:
+        sorted_chat = sorted(chat_activity.items(), key=lambda x: x[1], reverse=True)
+        top_chat_intervals = [interval for interval, _ in sorted_chat[:min_intervals]]
+        candidate_intervals.update(top_chat_intervals)
+        print(f"   Added top {min_intervals} chat intervals as minimum baseline")
+    
+    return list(candidate_intervals)
+
+
+def filter_by_multimodal_signals(chat_intervals: List[str], interval_data_dir: str) -> List[str]:
+    """
+    Filter high-chat intervals by emotion and laugh signals to avoid analyzing empty intervals.
+    """
+    filtered_intervals = []
+    
+    # Load emotion and laugh data
+    emotions_data = {}
+    laughs_data = {}
+    
+    emotions_path = os.path.join(interval_data_dir, 'video_emotions.json')
+    if os.path.exists(emotions_path):
+        with open(emotions_path, 'r', encoding='utf-8') as f:
+            emotions_data = json.load(f)
+    
+    laughs_path = os.path.join(interval_data_dir, 'audio_laughs.json')
+    if os.path.exists(laughs_path):
+        with open(laughs_path, 'r', encoding='utf-8') as f:
+            laughs_data = json.load(f)
+    
+    for interval in chat_intervals:
+        # Check if interval has meaningful signals
+        has_emotion = emotions_data.get(interval, "no_face") not in ["no_face", ""]
+        has_laugh = laughs_data.get(interval, False) is True
+        
+        # Include interval if it has chat + (emotion OR laugh OR is in top chat regardless)
+        # This ensures we don't miss high-chat moments even without other signals
+        if has_emotion or has_laugh:
+            filtered_intervals.append(interval)
+        # Always include if it's a very high chat activity (to not miss chat-only highlights)
+        else:
+            filtered_intervals.append(interval)  # Keep all high-chat intervals for now
+    
+    print(f"🔍 Filtered intervals:")
+    print(f"   With emotions: {sum(1 for i in chat_intervals if emotions_data.get(i, 'no_face') not in ['no_face', ''])}")
+    print(f"   With laughs: {sum(1 for i in chat_intervals if laughs_data.get(i, False) is True)}")
+    print(f"   Total selected: {len(filtered_intervals)}")
+    
+    return filtered_intervals

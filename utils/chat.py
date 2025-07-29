@@ -92,7 +92,7 @@ def process_audio_from_chat(vod_url, audio_file_path, top_n=10, interval_seconds
         print(f"✓ chat_activity.json already exists, skipping processing")
     else:
         print("Processing chat activity...")
-        chat_message_activity_to_json(vod_url, interval_seconds, chat_activity_path)
+        chat_message_activity_to_json(video_id, interval_seconds, chat_activity_path)
     
     # Step 2: Load chat activity data
     with open(chat_activity_path, 'r', encoding='utf-8') as f:
@@ -216,7 +216,7 @@ def process_audio_from_chat(vod_url, audio_file_path, top_n=10, interval_seconds
     
     # Step 9: Update database with transcription path
     try:
-        from .create_db import update_file_path
+        from .db import update_file_path
         update_file_path(video_id, chat_transcript_path=transcription_output_path)
         print(f"✓ Database updated with chat transcript path")
     except Exception as e:
@@ -379,7 +379,7 @@ def _process_chat_core(video_id, audio_file_path, chat_activity, transcription_o
     
     # Step 9: Update database with transcription path
     try:
-        from .create_db import update_file_path
+        from .db import update_file_path
         update_file_path(video_id, chat_transcript_path=transcription_output_path)
         print(f"✓ Database updated with chat transcript path")
     except Exception as e:

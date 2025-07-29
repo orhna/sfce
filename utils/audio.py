@@ -235,7 +235,7 @@ def detect_audio_laughs(audio_path, interval_sec=5, chunk_duration=10, threshold
     
     # Update database with audio laughs path (if audio_id matches video_id pattern)
     try:
-        from .create_db import update_file_path
+        from .db import update_file_path
         # Try to extract video_id from audio_id (assuming format like twitch_12345678)
         if audio_id.startswith('twitch_'):
             video_id = audio_id.replace('twitch_', '')
