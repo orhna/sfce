@@ -3,6 +3,7 @@ config.py
 
 # Python cache files
 __pycache__/
+*.pyc
 
 # Data files (you may want to include some of these)
 *.mp4
@@ -13,3 +14,8 @@ __pycache__/
 # custom 
 LANGGRAPH_USECASES.md
 RAG_INTEGRATION_BRAINSTORM.md
+
+notebooks/
+*.ipynb
+
+installation.txt
