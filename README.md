@@ -1,6 +1,6 @@
 # Short Form Content Extraction (SFCExtraction)
 
-An AI-powered Python project for automatically extracting highlights from Twitch stream recordings using multi-modal analysis: chat activity, video emotion detection, audio laugh recognition, and LLM-powered content understanding.
+An AI-powered Python project for automatically extracting highlights from stream recordings using multi-modal analysis: chat activity, video emotion detection, audio laugh recognition, and LLM-powered content understanding. Currently supports only Twitch.
 
 ## 🚀 What It Does
 
@@ -43,33 +43,13 @@ pip install -r requirements.txt
 
 ### 3. Configuration Setup
 
-```bash
-# Copy configuration template
-cp config.example.py config.py
-```
 
 Edit `config.py` with your settings:
 
-```python
-# Database connection
-DATABASE_URL = 'postgresql://username:password@localhost:5432/sfce'
-
-# LLM Configuration (choose one)
-# Option 1: OpenAI (best quality, requires API key)
-OPENAI_API_KEY = 'your_openai_api_key_here'
-
-# Option 2: Qwen (good quality, cost-effective)
-QWEN_API_KEY = 'your_qwen_api_key_here'
-QWEN_MODEL = 'qwen-plus'
-
-# Option 3: Local Ollama (free, runs offline)
-OLLAMA_MODEL = 'qwen2.5:3b'  # or llama3.2:3b
-OLLAMA_BASE_URL = 'http://localhost:11434'
-```
 
 ### 4. LLM Setup
 
-**Option A: Local Ollama (Recommended for Privacy)**
+**Option A: Local Ollama**
 ```bash
 # Automated setup
 python setup_local_llm.py
@@ -103,7 +83,7 @@ Highlight Extraction → AI Descriptions → MP4 Clips + JSON
    - Chat activity counting (configurable intervals, default 5s)
    - Video emotion detection using MediaPipe + HSEmotion
    - Audio laugh detection using YAMNet
-   - Audio transcription for high-activity segments
+   - Audio transcription with Whisper for high-activity segments
 3. **Smart Selection**: Prioritizes top 10% chat intervals, with fallback for emotion/laugh signals
 4. **Multi-Modal Scoring**: LangGraph workflow combines all signals for highlight ranking
 5. **Video Extraction**: Creates MP4 clips with pre-padding and merges sequential intervals
@@ -119,8 +99,6 @@ python main.py https://www.twitch.tv/videos/2518537772
 # Custom parameters: 10s intervals, extract 15 highlights, 3s pre-padding
 python main.py https://www.twitch.tv/videos/2518537772 10 15 3
 
-# Reset database before processing
-python main.py https://www.twitch.tv/videos/2518537772 --reset-db
 ```
 
 ### Parameters
@@ -134,7 +112,7 @@ python main.py https://www.twitch.tv/videos/2518537772 --reset-db
 ### Output Structure
 
 ```
-/mnt/d/Projects/twitch/
+/../Projects/twitch/
 └── {video_id}/
     ├── video_id.mp4              # Original video
     ├── video_id.wav              # Extracted audio
@@ -174,8 +152,7 @@ python main.py https://www.twitch.tv/videos/2518537772 --reset-db
 ```
 SFCExtraction/
 ├── main.py                     # Main entry point
-├── config.py                   # Configuration (not in git)
-├── config.example.py           # Configuration template
+├── config.py                   # Configuration 
 ├── setup_local_llm.py          # Automated LLM setup
 ├── requirements.txt            # Python dependencies
 └── utils/
@@ -186,20 +163,6 @@ SFCExtraction/
     ├── audio.py               # Audio laugh detection
     └── chat.py                # Chat processing and transcription
 ```
-
-## ⚡ Performance Tips
-
-- **GPU Acceleration**: Improves emotion detection and transcription speed
-- **SSD Storage**: Faster video processing with solid-state drives
-- **Local LLM**: Ollama provides good performance without API costs
-- **Batch Processing**: Process multiple VODs sequentially for efficiency
-
-## 🔒 Privacy & Security
-
-- Configuration files (`config.py`) excluded from version control
-- Local LLM option (Ollama) keeps all processing offline
-- PostgreSQL database stays on your local machine
-- No external data sharing unless using cloud LLM APIs
 
 ## 🐛 Troubleshooting
 
