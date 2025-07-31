@@ -1,5 +1,4 @@
 # Configuration files with sensitive data
-config.py
 
 # Python cache files
 __pycache__/
@@ -12,10 +11,5 @@ __pycache__/
 *.json 
 
 # custom 
-LANGGRAPH_USECASES.md
-RAG_INTEGRATION_BRAINSTORM.md
-
 notebooks/
 *.ipynb
-
-installation.txt
