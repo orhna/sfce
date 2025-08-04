@@ -1,4 +1,4 @@
-# Short Form Content Extraction (SFCExtraction)
+# Short Form Content Extraction
 
 An AI-powered Python project for automatically extracting highlights from stream recordings using multi-modal analysis: chat activity, video emotion detection, audio laugh recognition, and LLM-powered content understanding. Currently supports only Twitch.
 
