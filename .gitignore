@@ -13,3 +13,5 @@ __pycache__/
 # custom 
 notebooks/
 *.ipynb
+RAG_INTEGRATION_BRAINSTORM.md
+LANGGRAPH_USECASES.md
